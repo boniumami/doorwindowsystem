@@ -1,64 +1,54 @@
-import { spawn } from 'node:child_process'
-import http from 'node:http'
-import fs from 'node:fs'
-import fsp from 'node:fs/promises'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+const express = require('express');
+const path = require('path');
+const http = require('http');
 
-// 获取当前prod.mjs文件所在目录，再向上一层拿到项目根dist
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-const dist = path.join(__dirname, '../dist')
+const app = express();
 
-const backend = spawn(process.execPath, ['./index.js'], { stdio: 'inherit', cwd: __dirname })
-const PORT = Number(process.env.PORT) || 3000
-const mime = {
-  '.html': 'text/html;charset=utf-8',
-  '.js': 'text/javascript;charset=utf-8',
-  '.css': 'text/css;charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon'
-}
+// 解析json请求体
+app.use(express.json());
 
-http.createServer(async (req, res) => {
-  // ✅ 放到请求回调里面！固定host，不再读取req.headers.host
-  const u = new URL(req.url, 'http://127.0.0.1');
-  console.log("原始req.url=", req.url);
-  console.log("pathname=", u.pathname);
+// ===================== 静态资源，直接用绝对路径 /app/dist =====================
+const staticDir = path.join('/app', 'dist');
+app.use(express.static(staticDir));
 
-  // ✅ 重点：改成 /api/ 严格匹配，避免误命中
-  if (u.pathname.startsWith('/api/')) {
-    const proxy = http.request(
-      { hostname: '127.0.0.1', port: 3001, path: u.pathname + u.search, method: req.method, headers: req.headers },
-      r => { res.writeHead(r.statusCode, r.headers); r.pipe(res) }
-    )
-    req.pipe(proxy)
-    return
-  }
+// ===================== API代理（代理到后端 3001，你的index.js） =====================
+app.use('/api', (req, res) => {
+  const targetHost = '127.0.0.1';
+  const targetPort = 3001;
 
-  let fp = path.join(dist, u.pathname === '/' ? 'index.html' : u.pathname.slice(1))
-  if (!fp.startsWith(dist)) { res.writeHead(404); return res.end() }
-  try {
-    if (fs.existsSync(fp) && fs.statSync(fp).isFile()) {
-      const buf = await fsp.readFile(fp)
-      res.writeHead(200, { 'Content-Type': mime[path.extname(fp)] || 'application/octet-stream' })
-      return res.end(buf)
+  const proxyReq = http.request({
+    host: targetHost,
+    port: targetPort,
+    path: req.originalUrl,
+    method: req.method,
+    headers: req.headers
+  }, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res, { end: true });
+  });
+
+  req.pipe(proxyReq, { end: true });
+
+  proxyReq.on('error', (err) => {
+    console.error('api proxy error:', err);
+    res.status(503).json({ msg: '后端服务不可用' });
+  });
+});
+
+// ===================== SPA前端路由兜底，刷新页面404修复 =====================
+app.get('*', (req, res) => {
+  const indexFile = path.join(staticDir, 'index.html');
+  res.sendFile(indexFile, (err) => {
+    if(err) {
+      console.error('sendFile error', err);
+      res.status(404).send('页面不存在');
     }
-  } catch {}
-  // SPA路由兜底
-  try {
-    const buf = await fsp.readFile(path.join(dist, 'index.html'))
-    res.writeHead(200, { 'Content-Type': 'text/html;charset=utf-8' })
-    res.end(buf)
-  } catch {
-    res.writeHead(404);
-    res.end('dist not found, run npm run build first')
-  }
-}).listen(PORT, '0.0.0.0', () => console.log(`prod server on ${PORT}`))
+  });
+});
 
-const stop = () => { backend.kill(); process.exit() }
-process.on('SIGINT', stop)
-process.on('SIGTERM', stop)
-backend.on('exit', stop)
-
+// ===================== 启动监听，Railway自动注入PORT =====================
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`prod server start on port ${PORT}`);
+  console.log(`static folder: ${staticDir}`);
+});
