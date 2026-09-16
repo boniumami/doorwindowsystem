@@ -5,6 +5,10 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const u = new URL(req.url, 'http://127.0.0.1');
+console.log("原始req.url=", req.url);
+console.log("pathname=", u.pathname);
+
 // 获取当前prod.mjs文件所在目录，再向上一层拿到项目根dist
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
