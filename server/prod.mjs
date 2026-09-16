@@ -1,54 +1,61 @@
-const express = require('express');
-const path = require('path');
-const http = require('http');
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const app = express();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const staticRoot = path.join('/app', 'dist');
+const backendHost = '127.0.0.1';
+const backendPort = 3001;
 
-// 解析json请求体
-app.use(express.json());
+const server = http.createServer((req, res) => {
+  // API请求，转发到后端
+  if (req.url.startsWith('/api')) {
+    const proxyReq = http.request({
+      host: backendHost,
+      port: backendPort,
+      path: req.url,
+      method: req.method,
+      headers: req.headers
+    }, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(res);
+    });
+    req.pipe(proxyReq);
+    proxyReq.on('error', () => {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ msg: '后端服务不可用' }));
+    });
+    return;
+  }
 
-// ===================== 静态资源，直接用绝对路径 /app/dist =====================
-const staticDir = path.join('/app', 'dist');
-app.use(express.static(staticDir));
+  // 静态文件
+  let filePath;
+  if (req.url === '/') {
+    filePath = path.join(staticRoot, 'index.html');
+  } else {
+    filePath = path.join(staticRoot, req.url);
+  }
 
-// ===================== API代理（代理到后端 3001，你的index.js） =====================
-app.use('/api', (req, res) => {
-  const targetHost = '127.0.0.1';
-  const targetPort = 3001;
-
-  const proxyReq = http.request({
-    host: targetHost,
-    port: targetPort,
-    path: req.originalUrl,
-    method: req.method,
-    headers: req.headers
-  }, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode, proxyRes.headers);
-    proxyRes.pipe(res, { end: true });
-  });
-
-  req.pipe(proxyReq, { end: true });
-
-  proxyReq.on('error', (err) => {
-    console.error('api proxy error:', err);
-    res.status(503).json({ msg: '后端服务不可用' });
-  });
-});
-
-// ===================== SPA前端路由兜底，刷新页面404修复 =====================
-app.get('*', (req, res) => {
-  const indexFile = path.join(staticDir, 'index.html');
-  res.sendFile(indexFile, (err) => {
-    if(err) {
-      console.error('sendFile error', err);
-      res.status(404).send('页面不存在');
+  fs.stat(filePath, (err, stat) => {
+    // 文件不存在 → 返回index.html（SPA兜底）
+    if (err || !stat.isFile()) {
+      filePath = path.join(staticRoot, 'index.html');
     }
+    fs.readFile(filePath, (readErr, data) => {
+      if (readErr) {
+        res.writeHead(404);
+        res.end('404 Not Found');
+        return;
+      }
+      res.writeHead(200);
+      res.end(data);
+    });
   });
 });
 
-// ===================== 启动监听，Railway自动注入PORT =====================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`prod server start on port ${PORT}`);
-  console.log(`static folder: ${staticDir}`);
+server.listen(PORT, () => {
+  console.log(`原生静态代理服务启动，端口：${PORT}`);
 });
