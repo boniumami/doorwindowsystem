@@ -4,11 +4,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const staticRoot = path.join('/app', 'dist');
+// 改回你原来的动态路径，不再硬编码 /app
+const staticRoot = path.join(__dirname, '../dist');
 const backendHost = '127.0.0.1';
-const backendPort = 3002; // 注意：后端API是3002，之前日志BOM API监听3002，这里修正！
+const backendPort = 3002; // API后端端口3002不变
 
-// MIME类型对照表，解决ES模块js文件类型为空报错
+// MIME对照表，解决浏览器ES模块MIME空报错
 const mimeMap = {
   '.html': 'text/html;charset=utf-8',
   '.css': 'text/css;charset=utf-8',
@@ -23,7 +24,7 @@ const mimeMap = {
 };
 
 const server = http.createServer((req, res) => {
-  // API请求，转发到后端3002端口
+  // API请求转发到3002后端
   if (req.url.startsWith('/api')) {
     const proxyReq = http.request({
       host: backendHost,
@@ -52,7 +53,7 @@ const server = http.createServer((req, res) => {
   }
 
   fs.stat(filePath, (err, stat) => {
-    // 文件不存在 → SPA兜底返回index.html
+    // 文件不存在，SPA兜底返回index.html
     if (err || !stat.isFile()) {
       filePath = path.join(staticRoot, 'index.html');
     }
@@ -62,7 +63,6 @@ const server = http.createServer((req, res) => {
         res.end('404 Not Found');
         return;
       }
-      // 根据后缀获取MIME类型
       const ext = path.extname(filePath);
       const contentType = mimeMap[ext] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': contentType });
@@ -72,6 +72,10 @@ const server = http.createServer((req, res) => {
 });
 
 const PORT = Number(process.env.PORT) || 3001;
+// 捕获启动阶段错误，把崩溃信息打印到日志
+process.on('uncaughtException', (err) => {
+  console.error('prod.mjs 异常崩溃：', err);
+});
 server.listen(PORT, () => {
   console.log(`原生静态代理服务启动，端口：${PORT}`);
 });
